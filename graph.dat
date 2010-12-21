@@ -1,0 +1,33 @@
+.G1
+label left "Time" "(hours)" left .2
+label right "Index Size" "(GBytes)" right .3
+label bottom "datasize" "(in Megabases)" down .1
+#ticks left out at 120 "2min", 270000 "75hrs"
+coord memory 
+draw t1 solid
+draw t2 solid
+draw t3 solid
+draw t4 solid
+draw t5 solid
+draw c1 dotted
+draw m1 dashed
+copy thru { 
+   next t1 at $1,$2 
+   next m1 at memory $1,$8
+   next c1 at $1,$7
+   bullet at $1,$7
+   if $3 > -1 then { next t2 at $1, $3 }
+   if $4 > -1 then { next t3 at $1, $4 }
+   if $5 > -1 then { next t4 at $1, $5 }
+   if $6 > -1 then { next t5 at $1, $6 }
+   
+   tx = $2/3600;
+   tick left at $2 sprintf("%1.0f", tx)
+   tick right at memory $8 sprintf("%1.0f", $8/1000000)
+} until "XXX"
+20, 0, 0, 0, 0, 0
+21, 1, 0, 0, 0, 0
+22, 113, 20, 11, 5, 0
+23, 221, 0, 0, 0, 0
+XXX
+.G2
