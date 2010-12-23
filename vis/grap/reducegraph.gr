@@ -1,0 +1,50 @@
+.G1
+
+frame ht 6 wid 6
+define square {"\s-2\(sq\s0"}
+margin=.05
+
+thisrank = 0
+startTime = 0
+endTime = 0
+endMapTime = 0
+
+copy "map.d" thru {
+     if startTime == 0 then { startTime = $2 }
+     startTime = min(startTime, $2)
+
+     vtick color "black" at $2,thisrank
+     square color "red" at $3,thisrank
+     line from $2,thisrank to $3,thisrank color "red"
+
+     if endMapTime == 0 then { endMapTime = $3 }
+     endMapTime = max(endMapTime, $3)
+
+     thisrank=thisrank+1
+}
+
+maxRank = thisrank
+
+# taskid                          start-time maps-complete shuffle-finish end-time   elapsed-time number-of-attempts
+# task_201012162033_0001_r_000000 1292535528 1292561171    1292561249     1292563596 28068        1
+thisrank = 1
+copy "reduce.d" thru {
+     bullet color "green" at max($2,$3),thisrank
+     vtick at $4,thisrank
+     square color "yellow" at $5,thisrank
+     line from max($2,$3),thisrank to $4,thisrank color "green"
+     line from $4,thisrank to $5,thisrank color "yellow"
+
+     if endTime == 0 then { endTime = $5 }
+     endTime = max(endTime, $5)
+
+     thisrank=thisrank+1
+}
+
+elapsedTime = endTime - startTime
+
+line from startTime,0 to endTime,0 color "blue"
+plot elapsedTime at startTime+elapsedTime/2,0
+line from endMapTime,maxRank to endMapTime,0 color "blue"
+plot maxRank at endTime,maxRank/2
+.G2
