@@ -1,0 +1,535 @@
+#!/usr/bin/env groovy
+
+/*
+ * Copyright (c) 2010, The Regents of the University of California, through Lawrence Berkeley
+ * National Laboratory (subject to receipt of any required approvals from the U.S. Dept. of Energy).
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without modification, are permitted provided
+ * that the following conditions are met:
+ *
+ * (1) Redistributions of source code must retain the above copyright notice, this list of conditions and the
+ * following disclaimer.
+ *
+ * (2) Redistributions in binary form must reproduce the above copyright notice, this list of conditions
+ * and the following disclaimer in the documentation and/or other materials provided with the distribution.
+ *
+ * (3) Neither the name of the University of California, Lawrence Berkeley National Laboratory, U.S. Dept.
+ * of Energy, nor the names of its contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+ * PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * You are under no obligation whatsoever to provide any bug fixes, patches, or upgrades to the
+ * features, functionality or performance of the source code ("Enhancements") to anyone; however,
+ * if you choose to make your Enhancements available either publicly, or directly to Lawrence Berkeley
+ * National Laboratory, without imposing a separate written license agreement for such Enhancements,
+ * then you hereby grant the following license: a  non-exclusive, royalty-free perpetual license to install,
+ * use, modify, prepare derivative works, incorporate into other computer software, distribute, and
+ * sublicense such enhancements or derivative works thereof, in binary and source code form.
+ */
+
+/*
+ * thinking about what kind of functionality i want to see.  ie, what kinds of questions are helpful?
+ *
+ * 1. overall job statistics (especially if the website has archived or removed them)
+ *    Job name
+ *    number of maps
+ *    numer of reduces
+ *    total bytes, etc.  (replicate the summary from the website)
+ *    command -s
+ * 2. average time for map tasks (including the number of tasks, number of instances, number killed, etc)
+ *    command -m
+ * 3. average time for reduce tasks (including the number of tasks, number of instances, number killed, etc)
+ *    command -r
+ * 4. timeline of map/shuffle/reduce
+ *    command -t
+ *
+ *
+ * 5. need to support both csv and space seperated list
+ *    -d <delimiter>
+ *
+ */
+
+/* ==================================== */
+/* = commandline processing functions = */
+/* ==================================== */
+
+
+/**
+ *  processes the argments from commandline and returns map.
+ *  flags are boolean and params take the following argument as value
+ *
+ * @param flag list of flags in the form ['-b', '-d',]
+ * @param params is list of flags that take a value
+ * @param args is the commandline argment as list
+ * @return map file of the form ['-d': true, '-x': 'value']
+ */
+Map processArgs(Set flags, Set params, List<String> args) {
+  boolean error = false;
+  Map options = [:]
+
+  //
+  // first process any java options of the form -Dxxx=yyy
+  //
+  newargs = [];
+  options["java"] = "";
+  args.each {a ->
+    if (a ==~ /^-D[\S]+(=.*)+$/ ) {
+      options["java"] = options["java"] + " " + a;
+    } else {
+      newargs.add(a);
+    }
+  }
+  args = newargs;
+
+  //
+  // process the flags first
+  //
+  flags.each {f ->
+    if (args.contains(f)) {
+      options[f] = true
+      args.remove(f)
+    }
+  }
+
+  //
+  // now for the parameters
+  //
+  params.each {p ->
+    if (args.contains(p)) {
+
+      // the value of the parameter is the next in sequence
+
+      def v = args[args.findIndexOf { it == p} + 1]
+
+      // make sure value is not a parameter
+
+      if (v && v[0] != '-') {
+        options[p] = v
+        args.remove(v)
+        args.remove(p)
+      } else {
+        // if no value is found set error but continue
+        error = true
+      }
+    }
+  }
+
+  options['error'] = error
+
+  //
+  // now set the remaining unused args in options.args[0] ...
+  //
+  options['args'] = args
+
+  return options
+}
+
+/**
+ * prints the usage for the command
+ */
+void printUsage() {
+  println("usage: cat <log_file> | job_history > outputfile")
+}
+
+/* ======================= */
+/* = Script starts here  = */
+/* ======================= */
+
+
+/*
+        setup the parameters and process commandline
+*/
+
+List largs = (List) args
+
+Set flags = ['--help', '-?', '-t', '-m', '-r', '-s'] as Set;
+Set params = ['-d', '-i'] as Set;
+
+def options = processArgs(flags, params, largs)
+
+if (options.error) {
+  printUsage()
+  System.exit(1)
+}
+
+if (options['--help'] || options['-?']) {
+  printUsage()
+  System.exit(0)
+}
+
+String seperator = ", "
+if (options['-d']) {
+  seperator = options['-d'];
+}
+
+def input = System.in;
+
+if (options['-i']) {
+  String logfile = options['-i']
+  if (logfile.startsWith("http")) {
+    // the file is a url, so fetch it from the network
+    input = new URL(logfile);
+
+  } else if (logfile == "-") {
+    // read from stdin (default)
+  } else {
+    // the file is a local file path, so
+    input = new File(logfile);
+  }
+}
+
+pat = /([^=]+)="([^"]*)" */
+groupPat = /\{\(([^)]+)\)\(([^)]+)\)([^}]+)\}/
+counterPat = /\[\(([^)]+)\)\(([^)]+)\)\(([^)]+)\)\]/
+
+remainder = "";
+long scale = 1000;
+def job = [:]
+def mapTask = [:]
+def reduceTask = [:]
+def mapStartTime = [:]
+def mapEndTime= [:]
+def finalAttempt = [:]
+def wastedAttempts = []
+def reduceStartTime = [:]
+def reduceEndTime = [:]
+def reduceShuffleTime = [:]
+def reduceSortTime = [:]
+def reduceBytes = [:]
+long submitTime, finishTime;
+
+input.eachLine() {line ->
+	if (line.length() < 3 || !line.endsWith(" .")) {
+      remainder += line;
+    } else {
+      line = remainder + line;
+      remainder = ""
+
+      String[] words = line.split(" ", 2);
+      String event = words[0];
+
+      def m = words[1] =~ pat;
+      //println("m = " + m[0]);
+      Map attrs = [:];
+      m.each {match ->
+        attrs[match[1]] = match[2];
+      }
+      //println("attrs = " + attrs);
+
+
+      if (event == 'Job') {
+        attrs.each {k, v ->
+          job[k] = v
+        }
+        if (attrs.containsKey("SUBMIT_TIME")) {
+          submitTime = (attrs["SUBMIT_TIME"].toLong())/scale;
+        } else if (attrs.containsKey("FINISH_TIME")) {
+          finishTime = (attrs["FINISH_TIME"].toLong())/scale;
+        }
+      } else if (event == 'MapAttempt') {
+        if (attrs["TASK_TYPE"] == "CLEANUP" || attrs["TASK_TYPE"] == "SETUP") {
+          return
+        }
+        //println("mapattempt with id: " + attrs["TASKID"] + "maptask(id) = " + mapTask[attrs["TASKID"]]);
+        if (mapTask[attrs["TASKID"]] == null) {
+          mapTask[attrs["TASKID"]] = [:]
+          mapTask[attrs["TASKID"]]["NUM_ATTEMPTS"] = 0;
+        }
+        if (mapTask[attrs["TASKID"]][attrs["TASK_ATTEMPT_ID"]] == null) {
+          mapTask[attrs["TASKID"]][attrs["TASK_ATTEMPT_ID"]] = [:]
+          //println("taskid = " + mapTask[attrs["TASKID"]] + " numattempts = " + mapTask[attrs["TASKID"]]["NUM_ATTEMPTS"]);
+          mapTask[attrs["TASKID"]]["NUM_ATTEMPTS"] = mapTask[attrs["TASKID"]]["NUM_ATTEMPTS"] + 1;
+        }
+        attrs.each {k, v ->
+          mapTask[attrs["TASKID"]][attrs["TASK_ATTEMPT_ID"]][k] = v;
+        }
+        if (attrs.containsKey("START_TIME")) {
+          long time = attrs["START_TIME"].toLong()/scale;
+          //println("starttime= " + mapTask[attrs["TASKID"]] )
+          //if (mapTask[attrs["TASKID"]]["START_TIME"] == null || time < mapTask[attrs["TASKID"]]["START_TIME"]) {
+          //    mapTask[attrs["TASKID"]]["START_TIME"] = time;
+          //}
+          if (time != 0) {
+            mapStartTime[attrs["TASK_ATTEMPT_ID"]] = time
+
+          }
+        } else if (attrs.containsKey("FINISH_TIME")) {
+          long time = attrs["FINISH_TIME"].toLong()/scale;
+          mapEndTime[attrs["TASK_ATTEMPT_ID"]] = time
+          if (attrs["TASK_STATUS"] == "SUCCESS") {
+            task = attrs["TASKID"]
+            //if (mapTask[attrs["TASKID"]]["FINISH_TIME"] == null || time > mapTask[attrs["TASKID"]]["FINISH_TIME"]) {
+            //  mapTask[attrs["TASKID"]]["FINISH_TIME"] = time;
+            //}
+            if (finalAttempt.containsKey(task)) {
+              wastedAttempts.add(finalAttempt[task])
+            }
+            finalAttempt[task] = attrs["TASK_ATTEMPT_ID"]
+          } else {
+            wastedAttempts.add(attrs["TASK_ATTEMPT_ID"])
+          }
+        }
+      } else if (event == 'ReduceAttempt') {
+        if (reduceTask[attrs["TASKID"]] == null) {
+          reduceTask[attrs["TASKID"]] = [:]
+          reduceTask[attrs["TASKID"]]["NUM_ATTEMPTS"] = 0;
+        }
+        if (reduceTask[attrs["TASKID"]][attrs["TASK_ATTEMPT_ID"]] == null) {
+          reduceTask[attrs["TASKID"]][attrs["TASK_ATTEMPT_ID"]] = [:]
+          reduceTask[attrs["TASKID"]]["NUM_ATTEMPTS"] = reduceTask[attrs["TASKID"]]["NUM_ATTEMPTS"] + 1;
+        }
+        attrs.each {k, v ->
+          reduceTask[attrs["TASKID"]][attrs["TASK_ATTEMPT_ID"]][k] = v;
+        }
+        if (attrs.containsKey("START_TIME")) {
+          long time = (long) attrs["START_TIME"].toLong() / scale
+          if (time != 0)
+            reduceStartTime[attrs["TASK_ATTEMPT_ID"]] = time
+        } else if (attrs.containsKey("FINISH_TIME")) {
+          task = attrs["TASKID"]
+          if (attrs["TASK_STATUS"] == "SUCCESS") {
+            if (finalAttempt.containsKey(task))
+              wastedAttempts.add(finalAttempt[task])
+            finalAttempt[task] = attrs["TASK_ATTEMPT_ID"]
+          } else {
+            wastedAttempts.add(attrs["TASK_ATTEMPT_ID"])
+          }
+          reduceEndTime[attrs["TASK_ATTEMPT_ID"]] = (long) ((attrs["FINISH_TIME"]).toLong() / scale)
+          if (attrs.containsKey("SHUFFLE_FINISHED"))
+            reduceShuffleTime[attrs["TASK_ATTEMPT_ID"]] = (long) ((attrs["SHUFFLE_FINISHED"]).toLong() / scale)
+          if (attrs.containsKey("SORT_FINISHED"))
+            reduceSortTime[attrs["TASK_ATTEMPT_ID"]] = (long) ((attrs["SORT_FINISHED"]).toLong() / scale)
+        }
+      } else if (event == 'Task') {
+        if (attrs["TASK_TYPE"] == "MAP") {
+          if (mapTask[attrs["TASKID"]] == null) {
+            mapTask[attrs["TASKID"]] = [:]
+            mapTask[attrs["TASKID"]]["NUM_ATTEMPTS"] = 0;
+          }
+          attrs.each {k, v ->
+            mapTask[attrs["TASKID"]][k] = v;
+          }
+        }
+        if (attrs["TASK_TYPE"] == "REDUCE") {
+          if (reduceTask[attrs["TASKID"]] == null) {
+            reduceTask[attrs["TASKID"]] = [:]
+            reduceTask[attrs["TASKID"]]["NUM_ATTEMPTS"] = 0;
+          }
+          attrs.each {k, v ->
+            reduceTask[attrs["TASKID"]][k] = v;
+          }
+        }
+
+
+        if (attrs["TASK_TYPE"] == "REDUCE" && attrs.containsKey("COUNTERS")) {
+          //println("attempted match with: " + attrs["COUNTERS"])
+          def mm = attrs["COUNTERS"] =~ groupPat;
+
+          def counters = [:]
+
+          mm.each {match ->
+            def c = [:]
+            def mmx = match[3] =~ counterPat
+            mmx.each {mmatch -> c[mmatch[2]] = mmatch[3].toLong();}
+            counters[match[2]] = c;
+          }
+          reduceBytes[attrs["TASKID"]] = counters['FileSystemCounters']['HDFS_BYTES_WRITTEN'];
+        }
+      }
+    }
+}
+
+void printNice(Map m, int ns) {
+  m.each {k, v ->
+
+    for (i in 0 .. ns) {
+      print(" ");
+    }
+    if (v instanceof java.util.Map ) {
+      print(k + ":\n")
+      printNice(v, ns+4)
+    } else if (k == "COUNTERS") {
+      def mm = v =~ groupPat;
+      def counters = [:]
+      mm.each {match ->
+        def c = [:]
+        def mmx = v =~ counterPat
+        mmx.each {mmatch -> c[mmatch[2]] = mmatch[3].toLong();}
+        counters[match[2]] = c;
+      }
+      print(k + ":\n")
+      printNice(counters, ns+4)
+    } else {
+      print (k + "=" + v + "\n");
+    }
+  }
+}
+
+if (options['-s']) {
+  println("Job details: ")
+  printNice(job, 4);
+
+  if (job["JOB_STATUS"] != "SUCCESS") {
+    System.exit(0);
+  }
+  println("Overview statistics")
+
+  println("    Total time: "+(long)(job["FINISH_TIME"].toLong()/scale - job["LAUNCH_TIME"].toLong()/scale));
+
+  // calculate average time for maptask
+  // also calculate timestamp when all maps are completed
+  long numMaps=0, totalMapTime=0;
+  long allMapsComplete = 0;
+  mapTask.keySet().each {taskid ->
+    task = mapTask.get(taskid);
+    if (task["FINISH_TIME"] != null) {
+      totalMapTime += (long) (task["FINISH_TIME"].toLong()/scale - task["START_TIME"].toLong()/scale)
+      numMaps++;
+      allMapsComplete = Math.max(allMapsComplete, task["FINISH_TIME"].toLong()/scale)
+    }
+  }
+  println("    Average map task length: "+(long)totalMapTime/numMaps);
+  println("    All Maps complete in: " + allMapsComplete)
+
+  // calculate average shuffle
+  long numReduce=0, totalReduceTime=0, totalShuffleTime=0;
+  reduceTask.keySet().each {taskid ->
+    task = reduceTask.get(taskid);
+    if (task["FINISH_TIME"] != null) {
+      // finish_time is null if reduce job failed.
+      totalReduceTime += (long) (task["FINISH_TIME"].toLong()/scale - task["START_TIME"].toLong()/scale)
+      totalShuffleTime += (long) (reduceShuffleTime[ finalAttempt[taskid]] - task["START_TIME"].toLong()/scale)
+      numReduce++;
+    }
+  }
+  println("    Average shuffle task length: "+(long)totalShuffleTime/numReduce);
+  println("    Average reduce task length: "+(long)totalReduceTime/numReduce);
+
+
+
+  System.exit(0);
+}
+
+if (options['-m']) {
+  println("Map details:")
+  println("taskid" +seperator+"start-time"+seperator+"end-time"+seperator+"elapsed-time"+seperator+"number-of-attempts")
+  mapTask.keySet().sort().each {taskid ->
+    task = mapTask.get(taskid);
+    println(taskid + seperator + (long)(task["START_TIME"].toLong()/scale) + seperator + (long)(task["FINISH_TIME"].toLong()/scale) + seperator +
+            (long) (task["FINISH_TIME"].toLong()/scale - task["START_TIME"].toLong()/scale)
+            + seperator + task["NUM_ATTEMPTS"]);
+  }
+  System.exit(0)
+}
+
+if (options['-r']) {
+  // calculate timestamp when all maps are complete
+  long allMapsComplete = 0;
+  mapTask.keySet().each {taskid ->
+    task = mapTask.get(taskid);
+    if (task["FINISH_TIME"] != null) {
+      allMapsComplete = Math.max(allMapsComplete, task["FINISH_TIME"].toLong()/scale)
+    }
+  }
+
+  println("Reduce details:")
+  println("taskid"+seperator+"start-time"+seperator+"maps-complete" + seperator + "shuffle-finish"+seperator+"end-time"+seperator+"elapsed-time"+seperator+"number-of-attempts")
+  reduceTask.keySet().sort().each {taskid ->
+    task = reduceTask.get(taskid);
+    println(taskid + seperator + (long) (task["START_TIME"].toLong()/scale) + seperator + allMapsComplete + seperator +
+            reduceShuffleTime[ finalAttempt[taskid]] + seperator + (long) (task["FINISH_TIME"].toLong()/scale) + seperator +
+            (long) (task["FINISH_TIME"].toLong()/scale - task["START_TIME"].toLong()/scale)
+            + seperator + task["NUM_ATTEMPTS"]);
+  }
+  System.exit(0)
+}
+
+def runningMaps = [:]
+def shufflingReduces = [:]
+def sortingReduces = [:]
+def runningReduces = [:]
+def waste = [:]
+def finals = [:]
+
+finalAttempt.values().each {t ->
+  finals[t] = "none";
+}
+
+println("submitTime = " + submitTime);
+println("finishTime = " + finishTime);
+println("range = " + (finishTime - submitTime));
+
+println("zeroing from 0 to " + (finishTime-submitTime));
+for (long t = 0 ; t < (finishTime - submitTime)+1; t++) {
+  runningMaps[t] = 0
+  shufflingReduces[t] = 0
+  sortingReduces[t] = 0
+  runningReduces[t] = 0
+  waste[t] = 0
+}
+
+mapEndTime.keySet().each {map ->
+  //println("map = " + map + " value = " + mapEndTime.get(map))
+  isFinal = finals.containsKey(map)
+  //println("isfinal = " + isFinal)
+  if (mapStartTime.containsKey(map)) {
+    //println("mapStartTime = " + mapStartTime.get(map))
+    for (long t = (mapStartTime[map]-submitTime); t <= (Math.min(mapEndTime[map],finishTime)-submitTime); t++) {
+      //println("t = " + t)
+      if (isFinal && runningMaps[t] !=  null) {
+        runningMaps[t] += 1
+      } else  {
+        if (waste[t] == null) {
+          println("waste[t] is null t = " + t + " keyset = " + waste.get(t))
+          println("map = " + map)
+          println("mapstartTime - submitTime = " +  (mapStartTime[map]-submitTime))
+          println("mapendTime - submitTime = " +  (Math.min(mapEndTime[map],finishTime)-submitTime))
+        }
+        waste[t] += 1
+      }
+    }
+  }
+}
+
+for (reduce in reduceEndTime.keySet()) {
+  if (reduceStartTime.containsKey(reduce)) {
+    if (finals.containsKey(reduce)) {
+      //println("checking reduce: " + reduce);
+      //println("reduceStartTime = " + reduceStartTime[reduce]-submitTime + " reduceShuffleTime = " + reduceShuffleTime[reduce]-submitTime)
+      for (long t = (reduceStartTime[reduce]-submitTime); t <= (Math.min(reduceShuffleTime[reduce],finishTime)-submitTime); t++) {
+        if (shufflingReduces[t] == null) {
+          println("shufflingreduces[t] is null t = " + t)
+          println("reduce = " + reduce)
+        }
+        shufflingReduces[t] += 1
+      }
+      for (long t = (reduceShuffleTime[reduce]-submitTime); t <= (Math.min(reduceSortTime[reduce],finishTime)-submitTime); t++) {
+        sortingReduces[t] += 1
+      }
+      for (long t = (reduceSortTime[reduce]-submitTime); t <= (Math.min(reduceEndTime[reduce],finishTime)-submitTime); t++) {
+        runningReduces[t] += 1
+      }
+    } else {
+      for (long t =  (reduceStartTime[reduce]-submitTime); t <= (Math.min(reduceEndTime[reduce],finishTime)-submitTime); t++) {
+        waste[t] += 1
+      }
+    }
+  }
+}
+println("time, maps, shuffle, merge, reduce, waste");
+
+for (long t in 0 .. runningMaps.size()-1) {
+  println(t + seperator  + runningMaps[t] + seperator + shufflingReduces[t] + seperator + sortingReduces[t] + seperator + runningReduces[t] + seperator + waste[t])
+}

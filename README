@@ -1,0 +1,71 @@
+Job_history analyzer for hadoop
+
+Figuring out what's going on in a hadoop job is really a black art.  The job website gives some information,
+but the job history log provides a more complete picture of what's going on.  This software parses the job
+history and produces summary statistics and tables that you can easily plot for a better understanding
+of what your job's execution.
+
+The original version was from
+     http://cs.smith.edu/dftwiki/index.php/Hadoop_Tutorial_1.1_--_Generating_Task_Timelines
+and i think he got it from one of the Yahoo guys.  That was in python and produces a summary of number of
+jobs by type over time.  Sriram Krishnan modified that script a bit.  It's definitely useful and is included here.
+
+But i've been rewriting the script in groovy (aka java) mostly because i can't keep my indentations straight
+and adding additional features.
+
+To use:
+
+   % job_history -i <url or path of logfile> [-d <optional delimiter>] [-s | -m | -r ]
+
+the output:
+
+   for -s (summary statistics)
+
+   Overview statistics
+      Average map task length: 9450.6328125
+      Average shuffle task length: 13765.465625
+      Average reduce task length: 17074.065625
+   Job details:
+       JOBID=job_201010291643_0125
+       JOBNAME=PigLatin:kmerStats\.pig
+       USER=kbhatia
+       SUBMIT_TIME=1289542263300
+       JOBCONF=hdfs://cvrsvc11-ib/tmp/mapred/system/job_201010291643_0125/job\.xml
+       JOB_PRIORITY=NORMAL
+       LAUNCH_TIME=1289542275747
+       TOTAL_MAPS=512
+       TOTAL_REDUCES=320
+       JOB_STATUS=SUCCESS
+       FINISH_TIME=1289568296892
+       FINISHED_MAPS=512
+       FINISHED_REDUCES=320
+       FAILED_MAPS=127
+       FAILED_REDUCES=12
+       COUNTERS:
+           Job Counters :
+               Launched reduce tasks=332
+
+   [snip]
+
+   for -m (map)
+
+   Map details:
+   taskid, start-time, end-time, elapsed-time, number-of-attempts
+   task_201010291643_0125_m_000000, 1289542284, 1289551128, 8843, 1
+   [snip]
+
+   for -r (reduce)
+   Reduce details:
+   taskid, start-time, shuffle-finish, end-time, elapsed-time, number-of-attempts
+   task_201010291643_0125_r_000000, 1289549319, 1289563040, 1289565101, 15782, 1
+   [snip]
+
+
+To generate Graphs:
+
+   in the grap/ subdirectory are a bunch of graph scripts for generating useful ps graphs.
+   to run them, use:
+           % grap reducegraph.gr | groff -pe -ms  | ps2pdf reducegraph.pdf
+
+
+
