@@ -1,5 +1,6 @@
 Job_history analyzer for hadoop
 
+
 Figuring out what's going on in a hadoop job is really a black art.  The job website gives some information,
 but the job history log provides a more complete picture of what's going on.  This software parses the job
 history and produces summary statistics and tables that you can easily plot for a better understanding
