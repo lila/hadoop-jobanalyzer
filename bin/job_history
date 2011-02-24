@@ -195,7 +195,7 @@ groupPat = /\{\(([^)]+)\)\(([^)]+)\)([^}]+)\}/
 counterPat = /\[\(([^)]+)\)\(([^)]+)\)\(([^)]+)\)\]/
 
 remainder = "";
-long scale = 1000;
+long scale = 1000000;
 def job = [:]
 def mapTask = [:]
 def reduceTask = [:]
@@ -408,6 +408,7 @@ if (options['-s']) {
   reduceTask.keySet().each {taskid ->
     task = reduceTask.get(taskid);
     if (task["FINISH_TIME"] != null) {
+      println()
       // finish_time is null if reduce job failed.
       totalReduceTime += (long) (task["FINISH_TIME"].toLong()/scale - task["START_TIME"].toLong()/scale)
       totalShuffleTime += (long) (reduceShuffleTime[ finalAttempt[taskid]] - task["START_TIME"].toLong()/scale)
@@ -481,13 +482,13 @@ for (long t = 0 ; t < (finishTime - submitTime)+1; t++) {
 }
 
 mapEndTime.keySet().each {map ->
-  //println("map = " + map + " value = " + mapEndTime.get(map))
+  println("map = " + map + " value = " + mapEndTime.get(map))
   isFinal = finals.containsKey(map)
-  //println("isfinal = " + isFinal)
+  println("isfinal = " + isFinal)
   if (mapStartTime.containsKey(map)) {
-    //println("mapStartTime = " + mapStartTime.get(map))
+    println("mapStartTime = " + mapStartTime.get(map))
     for (long t = (mapStartTime[map]-submitTime); t <= (Math.min(mapEndTime[map],finishTime)-submitTime); t++) {
-      //println("t = " + t)
+      println("t = " + t)
       if (isFinal && runningMaps[t] !=  null) {
         runningMaps[t] += 1
       } else  {

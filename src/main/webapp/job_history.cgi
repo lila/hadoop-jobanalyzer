@@ -81,25 +81,8 @@ Logger log = Logger.getLogger("hadooop-jobanalyzer");
 * backward compatibility, this script supports both wwww-urlencoded and multi-part
 */
 post = [:]
-
-try {
-  def multi = new MultipartParser(request, 1024 * 100)
-  while ((part = multi.readNextPart()) != null) {
-    if (part.isParam()) {
-      post[part.getName()] = part.getStringValue()
-      log.debug("post = ${post}")
-    }
-  }
-} catch (Exception e) {
-  // don't do anything
-}
 request.getParameterMap().each {k, v ->  post[k] = v[0] }
-
 response.setContentType("text/html");
-
-println(""""<body>
-            <IMG SRC="barchart.png" WIDTH="1200" HEIGHT="600" BORDER="0" USEMAP="#chart">
-            </body>""");
 
 def input = null;
 if (post.url) {
@@ -112,9 +95,8 @@ pat = /([^=]+)="([^"]*)" */
 groupPat = /\{\(([^)]+)\)\(([^)]+)\)([^}]+)\}/
 counterPat = /\[\(([^)]+)\)\(([^)]+)\)\(([^)]+)\)\]/
 String remainder = "";
-String seperator = ", "
 
-long scale = 1000;
+long scale = 100;
 def job = [:]
 def mapTask = [:]
 def reduceTask = [:]
@@ -313,8 +295,9 @@ mapEndTime.keySet().each {map ->
           println("map = " + map)
           println("mapstartTime - submitTime = " + (mapStartTime[map] - submitTime))
           println("mapendTime - submitTime = " + (Math.min(mapEndTime[map], finishTime) - submitTime))
+        } else {
+          waste[t] += 1
         }
-        waste[t] += 1
       }
     }
   }
@@ -327,8 +310,9 @@ for (reduce in reduceEndTime.keySet()) {
         if (shufflingReduces[t] == null) {
           println("shufflingreduces[t] is null t = " + t)
           println("reduce = " + reduce)
+        } else {
+          shufflingReduces[t] += 1
         }
-        shufflingReduces[t] += 1
       }
       for (long t = (reduceShuffleTime[reduce] - submitTime); t <= (Math.min(reduceSortTime[reduce], finishTime) - submitTime); t++) {
         sortingReduces[t] += 1
@@ -377,5 +361,8 @@ try {
   out.println(e);
 }
 
+println(""""<body>
+            <IMG SRC="barchart.png" WIDTH="1200" HEIGHT="600" BORDER="0" USEMAP="#chart">
+            </body>""");
 
 
