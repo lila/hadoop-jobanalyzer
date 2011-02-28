@@ -70,10 +70,16 @@ import org.jfree.chart.entity.StandardEntityCollection
 import org.jfree.chart.ChartUtilities
 import org.jfree.chart.ChartFactory
 import org.jfree.data.general.DefaultPieDataset
+import org.jfree.chart.LegendItem
+import org.jfree.chart.LegendItemCollection
 
-props = new Properties().load(Logger.getClassLoader().getResourceAsStream("hadoop-jobanalyzer.properties"))
+
+String myPropertiesFile = "hadoop-jobanalyzer.properties"
+props = new Properties()
+props.load(Logger.getClassLoader().getResourceAsStream(myPropertiesFile))
 PropertyConfigurator.configure(props)
-Logger log = Logger.getLogger("hadooop-jobanalyzer");
+
+Logger log = Logger.getLogger("hadoop-jobanalyzer");
 
 /*
 * parameters are sent via post, but some existing gridauth clients use multi-part
@@ -288,7 +294,7 @@ for (long t = 0; t < (finishTime - submitTime) + 1; t++) {
 mapEndTime.keySet().each {map ->
   isFinal = finals.containsKey(map)
   if (mapStartTime.containsKey(map)) {
-    for (long t = (mapStartTime[map] - submitTime); t <= (Math.min(mapEndTime[map], finishTime) - submitTime); t++) {
+    for (long t = Math.max(0, (mapStartTime[map] - submitTime)); t <= (Math.min(mapEndTime[map], finishTime) - submitTime); t++) {
       if (isFinal && runningMaps[t] != null) {
         runningMaps[t] += 1
       } else {
@@ -308,23 +314,26 @@ mapEndTime.keySet().each {map ->
 for (reduce in reduceEndTime.keySet()) {
   if (reduceStartTime.containsKey(reduce)) {
     if (finals.containsKey(reduce)) {
-      for (long t = (reduceStartTime[reduce] - submitTime); t <= (Math.min(reduceShuffleTime[reduce], finishTime) - submitTime); t++) {
+      for (long t = Math.max(0, (reduceStartTime[reduce] - submitTime)); t <= (Math.min(reduceShuffleTime[reduce], finishTime) - submitTime); t++) {
         if (shufflingReduces[t] == null) {
-          //println("shufflingreduces[t] is null t = " + t)
-          //println("reduce = " + reduce)
+          log.debug("something wrong with the timestamps:")
+          log.debug("   submitTime = " + submitTime);
+          log.debug("   reduceStartTime[reduce] = " + reduceStartTime[reduce]);
+          log.debug("   reduce = " + reduce);
+          log.debug("shufflingreduces[t] is null t = " + t)
+          log.debug("reduce = " + reduce)
           shufflingReduces[t] = 0
-        } else {
-          shufflingReduces[t] += 1
         }
+       shufflingReduces[t] += 1
       }
-      for (long t = (reduceShuffleTime[reduce] - submitTime); t <= (Math.min(reduceSortTime[reduce], finishTime) - submitTime); t++) {
+      for (long t = Math.max(0, (reduceShuffleTime[reduce] - submitTime)); t <= (Math.min(reduceSortTime[reduce], finishTime) - submitTime); t++) {
         sortingReduces[t] += 1
       }
-      for (long t = (reduceSortTime[reduce] - submitTime); t <= (Math.min(reduceEndTime[reduce], finishTime) - submitTime); t++) {
+      for (long t = Math.max(0, (reduceSortTime[reduce] - submitTime)); t <= (Math.min(reduceEndTime[reduce], finishTime) - submitTime); t++) {
         runningReduces[t] += 1
       }
     } else {
-      for (long t = (reduceStartTime[reduce] - submitTime); t <= (Math.min(reduceEndTime[reduce], finishTime) - submitTime); t++) {
+      for (long t = Math.max(0, (reduceStartTime[reduce] - submitTime)); t <= (Math.min(reduceEndTime[reduce], finishTime) - submitTime); t++) {
         waste[t] += 1
       }
     }
@@ -334,26 +343,41 @@ for (reduce in reduceEndTime.keySet()) {
 
 final double[][] data = [runningMaps.values(), shufflingReduces.values(), sortingReduces.values(), runningReduces.values(), waste.values()];
 final CategoryDataset dataset = DatasetUtilities.createCategoryDataset(
-        "Maps", "", data);
+        "Map1", "", data);
 
 JFreeChart chart = ChartFactory.createStackedBarChart(input.toString(),
         "time", // domain axis label
         "number of instances", // range axis label
         dataset, // data
         PlotOrientation.VERTICAL,
-        false, // include legend
+        true, // include legend
         true, // tooltips?
         false // URLs?
 );
 
+LegendItemCollection result = new LegendItemCollection();
+LegendItem item1 = new LegendItem("Map", new Color(0x22, 0x22, 0xFF));
+LegendItem item2 = new LegendItem("Shuffle", new Color(0x22, 0xFF, 0x22));
+   LegendItem item3 = new LegendItem("Sort", new Color(0xFF, 0x22, 0x22));
+  LegendItem item4 = new LegendItem("Reduce", new Color(0xFF, 0xFF, 0x22));
+LegendItem item5 = new LegendItem("Waste", new Color(0x00, 0x00, 0x00));
+result.add(item1);
+      result.add(item2);
+    result.add(item3);
+  result.add(item4);
+  result.add(item5);
+
+CategoryPlot categoryplot = (CategoryPlot) chart.getPlot();
+categoryplot.setFixedLegendItems(result);
+
 chart.setBackgroundPaint(new Color(249, 231, 236));
 
 CategoryPlot plot = chart.getCategoryPlot();
-plot.getRenderer().setSeriesPaint(0, new Color(128, 0, 0));
-plot.getRenderer().setSeriesPaint(1, new Color(0, 0, 255));
-plot.getRenderer().setSeriesPaint(2, new Color(0, 255, 255));
-plot.getRenderer().setSeriesPaint(3, new Color(255, 255, 0));
-plot.getRenderer().setSeriesPaint(4, new Color(255, 255, 255));
+plot.getRenderer().setSeriesPaint(0, new Color(0x22, 0x22, 0xFF));
+plot.getRenderer().setSeriesPaint(1, new Color(0x22, 0xFF, 0x22));
+plot.getRenderer().setSeriesPaint(2, new Color(0xFF, 0x22, 0x22));
+plot.getRenderer().setSeriesPaint(3, new Color(0xFF, 0xFF, 0x22));
+plot.getRenderer().setSeriesPaint(4, new Color(0x00, 0x00, 0x00));
 
 java.awt.image.BufferedImage image;
 
