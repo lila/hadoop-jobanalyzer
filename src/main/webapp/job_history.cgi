@@ -69,6 +69,7 @@ import org.jfree.chart.ChartRenderingInfo
 import org.jfree.chart.entity.StandardEntityCollection
 import org.jfree.chart.ChartUtilities
 import org.jfree.chart.ChartFactory
+import org.jfree.data.general.DefaultPieDataset
 
 props = new Properties().load(Logger.getClassLoader().getResourceAsStream("hadoop-jobanalyzer.properties"))
 PropertyConfigurator.configure(props)
@@ -82,7 +83,8 @@ Logger log = Logger.getLogger("hadooop-jobanalyzer");
 */
 post = [:]
 request.getParameterMap().each {k, v ->  post[k] = v[0] }
-response.setContentType("text/html");
+response.setContentType("image/png");
+OutputStream outstream = response.getOutputStream();
 
 def input = null;
 if (post.url) {
@@ -291,10 +293,10 @@ mapEndTime.keySet().each {map ->
         runningMaps[t] += 1
       } else {
         if (waste[t] == null) {
-          println("waste[t] is null t = " + t + " keyset = " + waste.get(t))
-          println("map = " + map)
-          println("mapstartTime - submitTime = " + (mapStartTime[map] - submitTime))
-          println("mapendTime - submitTime = " + (Math.min(mapEndTime[map], finishTime) - submitTime))
+         // println("waste[t] is null t = " + t + " keyset = " + waste.get(t))
+         // println("map = " + map)
+         // println("mapstartTime - submitTime = " + (mapStartTime[map] - submitTime))
+         // println("mapendTime - submitTime = " + (Math.min(mapEndTime[map], finishTime) - submitTime))
         } else {
           waste[t] += 1
         }
@@ -308,8 +310,9 @@ for (reduce in reduceEndTime.keySet()) {
     if (finals.containsKey(reduce)) {
       for (long t = (reduceStartTime[reduce] - submitTime); t <= (Math.min(reduceShuffleTime[reduce], finishTime) - submitTime); t++) {
         if (shufflingReduces[t] == null) {
-          println("shufflingreduces[t] is null t = " + t)
-          println("reduce = " + reduce)
+          //println("shufflingreduces[t] is null t = " + t)
+          //println("reduce = " + reduce)
+          shufflingReduces[t] = 0
         } else {
           shufflingReduces[t] += 1
         }
@@ -352,17 +355,14 @@ plot.getRenderer().setSeriesPaint(2, new Color(0, 255, 255));
 plot.getRenderer().setSeriesPaint(3, new Color(255, 255, 0));
 plot.getRenderer().setSeriesPaint(4, new Color(255, 255, 255));
 
+java.awt.image.BufferedImage image;
+
 try {
   final ChartRenderingInfo info = new ChartRenderingInfo
   (new StandardEntityCollection());
-  final File file1 = new File(application.getRealPath("/WEB-INF") + "/../barchart.png");
-  ChartUtilities.saveChartAsPNG(file1, chart, 600, 400, info);
+  ChartUtilities.writeChartAsPNG(outstream, chart, 1200, 800);
 } catch (Exception e) {
   out.println(e);
 }
-
-println(""""<body>
-            <IMG SRC="barchart.png" WIDTH="1200" HEIGHT="600" BORDER="0" USEMAP="#chart">
-            </body>""");
 
 
